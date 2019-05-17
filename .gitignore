@@ -1,0 +1,4 @@
+.idea/
+vendor/
+schema/*.pb.go
+schema/*.pb.gw.go
