@@ -21,5 +21,5 @@ will ever apply a different log entry for the same index.
 ## Curl 
 
 ```bash
-curl -L -d '{"action":"Create", "data":{"x": "123"}}' -H "Content-Type: application/json" -X POST http://localhost:12004/v1/push
+curl -L -d '{"action":"Create", "data":{"x": "123"}}' -H "Content-Type: application/json" -X POST http://localhost:8080/append
 ```
