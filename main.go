@@ -56,6 +56,8 @@ func main() {
 			return
 		}
 
+		fmt.Printf("\nexpected leader: %d. actual: %d\n", leader, resp.Leader)
+
 		if resp.Leader != int32(leader) {
 			leader = int(resp.Leader)
 			client := srv.GetClients()[leader]
@@ -66,7 +68,7 @@ func main() {
 			}
 		}
 
-		fmt.Printf("Leader id: %d. Result: %#v", leader, resp)
+		fmt.Printf("\nleader id: %d. Result: %#v\n", leader, resp)
 
 		leader = int(resp.Leader)
 		_, err = w.Write([]byte(fmt.Sprintf("%t", resp.Success)))
