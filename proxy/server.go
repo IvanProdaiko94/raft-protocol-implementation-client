@@ -7,9 +7,12 @@ import (
 	"github.com/IvanProdaiko94/raft-protocol-implementation/env"
 	"github.com/IvanProdaiko94/raft-protocol-implementation/rpc"
 	"github.com/IvanProdaiko94/raft-protocol-implementation/schema"
+	"github.com/golang/protobuf/ptypes/empty"
 	"io/ioutil"
 	"math/rand"
 	"net/http"
+	"os"
+	"sync"
 	"time"
 )
 
@@ -50,52 +53,79 @@ func (s *server) Stop() error {
 }
 
 func (s *server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
+	if r.Method != http.MethodPost && r.Method != http.MethodGet {
 		http.Error(w, "not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 	defer r.Body.Close()
 
-	var cmd schema.Command
+	if r.Method == http.MethodGet {
+		var wg sync.WaitGroup
+		var mu sync.Mutex
+		ctx, _ := context.WithTimeout(context.Background(), time.Second*5)
 
-	body, _ := ioutil.ReadAll(r.Body)
-	err := json.Unmarshal(body, &cmd)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
+		for _, client := range s.clients {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				log, err := client.GetLog(ctx, &empty.Empty{})
+
+				mu.Lock()
+				defer mu.Unlock()
+				fmt.Println(log)
+				if err != nil {
+					_, _ = os.Stderr.Write([]byte(err.Error()))
+					_, _ = os.Stderr.Write([]byte("\n"))
+					return
+				}
+				_, _ = w.Write([]byte(fmt.Sprintf("%#v\n", log)))
+			}()
+		}
+		wg.Wait()
 	}
 
-	success := false
+	if r.Method == http.MethodPost {
+		var cmd schema.Command
 
-	ctx, _ := context.WithTimeout(context.Background(), time.Second*2)
-
-	for !success {
-		if s.leader == -1 {
-			s.leader = randRange(0, len(env.Cluster))
-		}
-
-		client := s.clients[s.leader]
-		fmt.Printf("\n%#v\n", client)
-		resp, err := client.NewEntry(ctx, &cmd)
-		if err == context.DeadlineExceeded {
+		body, _ := ioutil.ReadAll(r.Body)
+		err := json.Unmarshal(body, &cmd)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
-		} else if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			continue
-		}
-		fmt.Printf("\n expected leader: %d. actual: %d\n", s.leader, resp.Leader)
-		fmt.Printf("\n leader id: %d. Result: %#v\n", s.leader, resp)
-
-		if int(resp.Leader) != s.leader {
-			s.leader = int(resp.Leader)
 		}
 
-		if resp.Success {
-			success = resp.Success
-			_, err = w.Write([]byte(fmt.Sprintf("%t", resp.Success)))
-			if err != nil {
-				http.Error(w, err.Error(), http.StatusInternalServerError)
+		success := false
+
+		ctx, _ := context.WithTimeout(context.Background(), time.Second*2)
+
+		for !success {
+			if s.leader == -1 {
+				s.leader = randRange(0, len(env.Cluster))
+			}
+
+			client := s.clients[s.leader]
+			fmt.Printf("\n%#v\n", client)
+			resp, err := client.NewEntry(ctx, &cmd)
+			if err == context.DeadlineExceeded {
 				return
+			} else if err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				continue
+			}
+			fmt.Printf("\n expected leader: %d. actual: %d\n", s.leader, resp.Leader)
+			fmt.Printf("\n leader id: %d. Result: %#v\n", s.leader, resp)
+
+			if int(resp.Leader) != s.leader {
+				s.leader = int(resp.Leader)
+			}
+
+			if resp.Success {
+				success = resp.Success
+				_, err = w.Write([]byte(fmt.Sprintf("%t", resp.Success)))
+				if err != nil {
+					http.Error(w, err.Error(), http.StatusInternalServerError)
+					return
+				}
 			}
 		}
 	}
@@ -110,5 +140,6 @@ func NewServer(addr string, cluster []env.Node) Server {
 		leader:  -1,
 	}
 	mux.Handle("/append", srv)
+	mux.Handle("/log", srv)
 	return srv
 }
