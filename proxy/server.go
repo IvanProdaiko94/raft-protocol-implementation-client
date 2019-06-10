@@ -10,6 +10,7 @@ import (
 	"io/ioutil"
 	"math/rand"
 	"net/http"
+	"time"
 )
 
 func randRange(min, max int) int {
@@ -32,7 +33,7 @@ type server struct {
 func (s *server) Start(ctx context.Context) error {
 	for _, client := range s.clients {
 		if err := client.Deal(); err != nil {
-			panic(err)
+			fmt.Errorf("failed to connect to client: %s", err.Error())
 		}
 	}
 	if err := s.srv.ListenAndServe(); err != nil {
@@ -64,36 +65,39 @@ func (s *server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if s.leader == -1 {
-		s.leader = randRange(0, len(env.Cluster)-1)
-	}
+	success := false
 
-	client := s.clients[s.leader]
-	resp, err := client.NewEntry(context.Background(), &cmd)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
+	ctx, _ := context.WithTimeout(context.Background(), time.Second*2)
 
-	fmt.Printf("\nexpected leader: %d. actual: %d\n", s.leader, resp.Leader)
-
-	if resp.Leader != int32(s.leader) {
-		s.leader = int(resp.Leader)
-		client := s.clients[s.leader]
-		resp, err = client.NewEntry(context.Background(), &cmd)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
+	for !success {
+		if s.leader == -1 {
+			s.leader = randRange(0, len(env.Cluster))
 		}
-	}
 
-	fmt.Printf("\nleader id: %d. Result: %#v\n", s.leader, resp)
+		client := s.clients[s.leader]
+		fmt.Printf("\n%#v\n", client)
+		resp, err := client.NewEntry(ctx, &cmd)
+		if err == context.DeadlineExceeded {
+			return
+		} else if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			continue
+		}
+		fmt.Printf("\n expected leader: %d. actual: %d\n", s.leader, resp.Leader)
+		fmt.Printf("\n leader id: %d. Result: %#v\n", s.leader, resp)
 
-	s.leader = int(resp.Leader)
-	_, err = w.Write([]byte(fmt.Sprintf("%t", resp.Success)))
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
+		if int(resp.Leader) != s.leader {
+			s.leader = int(resp.Leader)
+		}
+
+		if resp.Success {
+			success = resp.Success
+			_, err = w.Write([]byte(fmt.Sprintf("%t", resp.Success)))
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+		}
 	}
 }
 
